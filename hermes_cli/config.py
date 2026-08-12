@@ -339,6 +339,19 @@ _MANAGED_TRUE_VALUES = ("true", "1", "yes")
 _MANAGED_SYSTEM_NAMES = {
     "nix": "NixOS",
     "nixos": "NixOS",
+    "home-manager": "Home Manager",
+    "homemanager": "Home Manager",
+}
+# The managed systems that keep the configuration in a Nix module. Both give
+# the user the same instruction: edit services.hermes-agent.settings, then
+# rebuild. Only the rebuild command is different. See
+# _MANAGED_REBUILD_COMMANDS.
+_NIX_MANAGED_SYSTEMS = ("NixOS", "Home Manager")
+_MANAGED_REBUILD_COMMANDS = {
+    "NixOS": "sudo nixos-rebuild switch",
+    # This command has no `sudo`. A Home Manager generation belongs to the
+    # user.
+    "Home Manager": "home-manager switch",
 }
 # The Nix store root. Used by detect_install_method to identify installs
 # from `nix run` / `nix profile install` (which don't set HERMES_MANAGED).
@@ -365,6 +378,17 @@ def get_managed_system() -> Optional[str]:
 
     managed_marker = get_hermes_home() / ".managed"
     if managed_marker.exists():
+        # An interactive shell reads the marker, because it does not see the
+        # HERMES_MANAGED variable of the service. A marker with content
+        # names the system that manages the install. A Home Manager install
+        # has no nixos-rebuild command to give to the user. An empty marker
+        # means NixOS.
+        try:
+            marker = managed_marker.read_text(errors="replace").strip().lower()
+        except OSError:
+            marker = ""
+        if marker and marker not in _MANAGED_TRUE_VALUES:
+            return _MANAGED_SYSTEM_NAMES.get(marker, "NixOS")
         return "NixOS"
     return None
 
@@ -388,7 +412,7 @@ _NIX_UPDATE_MSG = (
 def get_managed_update_command() -> Optional[str]:
     """Return the preferred upgrade command for a managed install."""
     managed_system = get_managed_system()
-    if managed_system == "NixOS":
+    if managed_system in _NIX_MANAGED_SYSTEMS:
         return _NIX_UPDATE_MSG
     return None
 
@@ -615,13 +639,13 @@ def format_managed_message(action: str = "modify this Hermes installation") -> s
     managed_system = get_managed_system() or "a package manager"
     raw = os.getenv("HERMES_MANAGED", "").strip().lower()
 
-    if managed_system == "NixOS":
+    if managed_system in _NIX_MANAGED_SYSTEMS:
         env_hint = "true" if raw in _MANAGED_TRUE_VALUES else raw or "true"
         return (
-            f"Cannot {action}: this Hermes installation is managed by NixOS "
-            f"(HERMES_MANAGED={env_hint}).\n"
-            "Edit services.hermes-agent.settings in your configuration.nix and run:\n"
-            "  sudo nixos-rebuild switch"
+            f"Cannot {action}: this Hermes installation is managed by "
+            f"{managed_system} (HERMES_MANAGED={env_hint}).\n"
+            "Edit services.hermes-agent.settings in your Nix configuration and run:\n"
+            f"  {_MANAGED_REBUILD_COMMANDS[managed_system]}"
         )
 
     return (
@@ -916,18 +940,17 @@ def ensure_hermes_home():
 
 def _ensure_hermes_home_managed(home: Path):
     """Managed-mode variant: verify dirs exist (activation creates them), seed SOUL.md."""
+    rebuild = _MANAGED_REBUILD_COMMANDS.get(
+        get_managed_system() or "", _MANAGED_REBUILD_COMMANDS["NixOS"]
+    )
     if not home.is_dir():
         raise RuntimeError(
-            f"HERMES_HOME {home} does not exist. "
-            "Run 'sudo nixos-rebuild switch' first."
+            f"HERMES_HOME {home} does not exist. Run '{rebuild}' first."
         )
     for subdir in ("cron", "sessions", "logs", "memories"):
         d = home / subdir
         if not d.is_dir():
-            raise RuntimeError(
-                f"{d} does not exist. "
-                "Run 'sudo nixos-rebuild switch' first."
-            )
+            raise RuntimeError(f"{d} does not exist. Run '{rebuild}' first.")
     # Curator reports dir is a sub-path of logs/; create it if missing.
     # In managed mode the activation script may not know about this subdir,
     # so we mkdir it ourselves (it's inside an already-secured logs/ dir).
