@@ -252,11 +252,17 @@ def _set_process_title() -> None:
     except ImportError:
         pass
 
-    # Strategy 2/3: platform-specific ctypes fallback
-    import ctypes
     import platform
 
+    # Windows: the .exe name is already ``hermes.exe`` — nothing to do.
+    # Skip ctypes entirely (Smart App Control can block _ctypes on some hosts).
+    if platform.system() == "Windows":
+        return
+
+    # Strategy 2/3: platform-specific ctypes fallback
     try:
+        import ctypes
+
         system = platform.system()
         if system == "Linux":
             libc = ctypes.CDLL("libc.so.6", use_errno=True)
@@ -264,7 +270,6 @@ def _set_process_title() -> None:
         elif system == "Darwin":
             libc = ctypes.CDLL("libc.dylib", use_errno=True)
             libc.pthread_setname_np(b"hermes")
-        # Windows: the .exe name is already ``hermes.exe`` — nothing to do.
     except Exception:
         pass
 
